@@ -1,0 +1,20 @@
+#!/bin/bash
+
+PATH="$PATH:/usr/local/bin"
+
+set -e
+
+fname="${4} - ${2}.mp3"
+fname="${fname//\//-}"
+SPOTIFY_ID="${1}"
+TITLE="${2//'\n'/' '}"
+ALBUM="${3//'\n'/' '}"
+ARTIST="${4//'\n'/' '}"
+shift 4
+for artist in "$@"; do
+  ARTIST="$ARTIST, ${artist//'\n'/' '}"
+done
+COMMENT="SPOTIFY_ID=${SPOTIFY_ID}"$'\n'"TITLE=${TITLE}"$'\n'"ALBUM=${ALBUM}"$'\n'"ARTIST=${ARTIST}"
+ffmpeg -i - -map_metadata 0:s:0 -id3v2_version 3 -codec:a libmp3lame -qscale:a 2 "${fname}" || exit 1
+id3v2 -2 -a "$ARTIST" -A "$ALBUM" -t "$TITLE" -c "$COMMENT" "${fname}"
+echo "${fname}"
