@@ -4,9 +4,12 @@ extern crate librespot_core;
 extern crate librespot_metadata;
 #[macro_use]
 extern crate log;
+#[macro_use]
+extern crate lazy_static;
 extern crate regex;
 extern crate scoped_threadpool;
 extern crate tokio_core;
+extern crate serde;
 
 use std::env;
 use std::io::{self, BufRead, Read, Result};
@@ -26,16 +29,46 @@ use regex::Regex;
 use scoped_threadpool::Pool;
 use tokio_core::reactor::Core;
 
+use std::path::Path;
+
+mod config;
+
+fn credentials_fail(_path: &Path) -> std::result::Result<Credentials, String> {
+    Err("No credentials found.".to_string())
+}
+
+fn get_credentials(reset: bool) -> Credentials {
+    let path = config::config_path("credentials.toml");
+    if reset && std::fs::remove_file(&path).is_err() {
+        error!("could not delete credential file");
+    }
+
+    let creds = config::load_or_generate_default(&path, credentials_fail, true)
+        .unwrap_or_else(|e| {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        });
+
+    #[cfg(target_family = "unix")]
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+        .unwrap_or_else(|e| {
+            eprintln!("{}", e);
+            std::process::exit(1);
+        });
+
+    creds
+}
+
 fn main() {
     Builder::from_env(Env::default().default_filter_or("info")).init();
 
     let args: Vec<_> = env::args().collect();
-    assert!(args.len() == 3 || args.len() == 4, "Usage: {} user password [helper_script] < tracks_file", args[0]);
+    assert!(args.len() == 1 || args.len() == 2, "Usage: {} user password [helper_script] < tracks_file", args[0]);
 
     let mut core = Core::new().unwrap();
     let handle = core.handle();
     let session_config = SessionConfig::default();
-    let credentials = Credentials::with_password(args[1].to_owned(), args[2].to_owned());
+    let credentials = get_credentials(false);
     info!("Connecting ...");
     let session = core
         .run(Session::connect(session_config, credentials, None, handle))
@@ -91,13 +124,13 @@ fn main() {
             read_all.expect("Cannot read file stream");
             let mut decrypted_buffer = Vec::new();
             AudioDecrypt::new(key, &buffer[..]).read_to_end(&mut decrypted_buffer).expect("Cannot decrypt stream");
-            if args.len() == 3 {
+            if args.len() == 1 {
                 let fname = format!("{} - {}.ogg", artists_strs.join(", "), track.name);
                 std::fs::write(&fname, &decrypted_buffer[0xa7..]).expect("Cannot write decrypted track");
                 info!("Filename: {}", fname);
             } else {
                 let album = core.run(Album::get(&session, track.album)).expect("Cannot get album metadata");
-                let mut cmd = Command::new(args[3].to_owned());
+                let mut cmd = Command::new(args[1].to_owned());
                 cmd.stdin(Stdio::piped());
                 cmd.arg(id.to_base62()).arg(track.name).arg(album.name).args(artists_strs.iter());
                 let mut child = cmd.spawn().expect("Could not run helper program");
